@@ -1,16 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useState } from 'react';
-import { Alert, FlatList, Image, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { searchWithSynonyms } from '../../synonyms';
-
-interface Item {
-  id: string;
-  name: string;
-  location: string;
-  date: string;
-  photos?: string[];
-}
+import { useEffect, useRef, useState } from 'react';
+import { Alert, FlatList, Image, Modal, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { searchWithSynonyms } from '../synonyms';
+import type { Item } from '../types';
 
 export default function EasyFindScreen() {
   const [input, setInput] = useState('');
@@ -25,10 +18,64 @@ export default function EasyFindScreen() {
   const [editName, setEditName] = useState('');
   const [editLocation, setEditLocation] = useState('');
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     loadItems();
   }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (typeof window === 'undefined' || !window.visualViewport) return;
+    const vv = window.visualViewport;
+    const handler = () => {
+      const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKeyboardOffset(offset);
+    };
+    vv.addEventListener('resize', handler);
+    vv.addEventListener('scroll', handler);
+    return () => {
+      vv.removeEventListener('resize', handler);
+      vv.removeEventListener('scroll', handler);
+    };
+  }, []);
+
+  const showToast = (message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 2200);
+  };
+
+  const handleExport = async () => {
+    if (items.length === 0) {
+      showToast('Rien à exporter');
+      return;
+    }
+    const payload = JSON.stringify({ exportedAt: new Date().toISOString(), items }, null, 2);
+    const filename = `easyfind-${new Date().toISOString().slice(0, 10)}.json`;
+
+    if (Platform.OS === 'web') {
+      if (typeof document === 'undefined') return;
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('✅ Exporté');
+      return;
+    }
+
+    try {
+      await Share.share({ message: payload, title: filename });
+    } catch (e) {
+      console.error('Export error:', e);
+    }
+  };
 
   const loadItems = async () => {
     try {
@@ -91,14 +138,77 @@ export default function EasyFindScreen() {
     Alert.alert('📷 Photo', 'Sur web, utilise le menu ⋮ d\'un objet pour ajouter une photo !\n\nSur téléphone : installe Expo Go pour utiliser la caméra.');
   };
 
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+    }
+    setIsRecording(false);
+  };
+
   const startRecording = async () => {
-    if (Platform.OS === 'web') {
-      Alert.alert(
-        '🎤 Reconnaissance vocale',
-        'La reconnaissance vocale fonctionne uniquement sur un vrai téléphone.\n\nPour tester :\n1. Installe "Expo Go" sur ton iPhone/Android\n2. Scanne le QR code\n3. Utilise le micro !',
-        [{ text: 'OK' }]
-      );
+    if (Platform.OS !== 'web') {
+      showToast('🎤 Disponible bientôt sur mobile natif');
       return;
+    }
+
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    const SpeechRecognition =
+      typeof window !== 'undefined'
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        : null;
+
+    if (!SpeechRecognition) {
+      showToast('Navigateur non supporté (essaie Chrome ou Safari)');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang =
+        (typeof navigator !== 'undefined' && navigator.language) || 'fr-FR';
+      recognition.interimResults = true;
+      recognition.continuous = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+        setInput(transcript);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('SpeechRecognition error:', event.error);
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          showToast('🎤 Permission micro refusée');
+        } else if (event.error === 'no-speech') {
+          showToast('🎤 Aucune parole détectée');
+        } else if (event.error !== 'aborted') {
+          showToast('🎤 Erreur reconnaissance vocale');
+        }
+        recognitionRef.current = null;
+        setIsRecording(false);
+      };
+
+      recognition.onend = () => {
+        recognitionRef.current = null;
+        setIsRecording(false);
+      };
+
+      recognitionRef.current = recognition;
+      setIsRecording(true);
+      recognition.start();
+    } catch (e) {
+      console.error('startRecording failed:', e);
+      showToast('🎤 Impossible de démarrer le micro');
+      recognitionRef.current = null;
+      setIsRecording(false);
     }
   };
 
@@ -179,7 +289,7 @@ export default function EasyFindScreen() {
       const updatedItems = [newItem, ...items];
       saveItems(updatedItems);
       setInput('');
-      Alert.alert('✅ Enregistré !', `${name}\n📍 ${location}`);
+      showToast(`✅ ${name} → ${location}`);
     }
   };
 
@@ -216,7 +326,7 @@ export default function EasyFindScreen() {
     saveItems(updatedItems);
     setEditModalVisible(false);
     setEditingItem(null);
-    Alert.alert('✅ Modifié !');
+    showToast('✅ Modifié');
   };
 
   const handleDeleteItem = (itemId: string) => {
@@ -253,7 +363,7 @@ export default function EasyFindScreen() {
 
   const lowerInput = input.toLowerCase();
   const isSearchMode =
-    input.trim() &&
+    !!input.trim() &&
     !lowerInput.includes(' dans ') &&
     !lowerInput.includes(' sur ') &&
     !lowerInput.includes('j\'ai rangé') &&
@@ -265,6 +375,12 @@ export default function EasyFindScreen() {
 
   return (
     <View style={styles.container}>
+      {toast && (
+        <View style={styles.toast} pointerEvents="none">
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      )}
+
       {/* Header avec hamburger */}
       <View style={styles.header}>
         <TouchableOpacity 
@@ -324,7 +440,12 @@ export default function EasyFindScreen() {
       )}
 
       {/* Barre de saisie - en bas sur mobile, au centre sur web */}
-      <View style={styles.inputBar}>
+      <View
+        style={[
+          styles.inputBar,
+          Platform.OS === 'web' && keyboardOffset > 0 && { transform: [{ translateY: -keyboardOffset }] },
+        ]}
+      >
         <TextInput
           style={styles.input}
           placeholder="J'ai rangé..."
@@ -343,10 +464,9 @@ export default function EasyFindScreen() {
           <Ionicons name="camera" size={26} color="#007AFF" />
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.iconButton, isRecording && styles.iconButtonRecording]}
           onPress={startRecording}
-          disabled={isRecording}
         >
           <Ionicons 
             name={isRecording ? "radio-button-on" : "mic"} 
@@ -383,6 +503,11 @@ export default function EasyFindScreen() {
             <Text style={styles.drawerCount}>
               {items.length} objet{items.length > 1 ? 's' : ''} enregistré{items.length > 1 ? 's' : ''}
             </Text>
+
+            <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
+              <Ionicons name="download-outline" size={18} color="#007AFF" />
+              <Text style={styles.exportButtonText}>Exporter en JSON</Text>
+            </TouchableOpacity>
 
             <FlatList
               data={items}
@@ -575,6 +700,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     paddingTop: 50,
   },
+  toast: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(40, 40, 40, 0.95)',
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    zIndex: 999,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  toastText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -759,6 +906,23 @@ const styles = StyleSheet.create({
     color: '#666',
     paddingHorizontal: 20,
     paddingVertical: 12,
+  },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#eaf3ff',
+    alignSelf: 'flex-start',
+  },
+  exportButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   drawerItem: {
     flexDirection: 'row',

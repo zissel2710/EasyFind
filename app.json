@@ -23,7 +23,16 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "EasyFind",
+      "shortName": "EasyFind",
+      "description": "Enregistre où tu ranges tes objets, retrouve-les en langage naturel.",
+      "lang": "fr",
+      "themeColor": "#007AFF",
+      "backgroundColor": "#f5f5f5",
+      "display": "standalone",
+      "orientation": "portrait",
+      "startUrl": "/"
     },
     "plugins": [
       "expo-router",

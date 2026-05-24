@@ -1,11 +1,4 @@
-// Même type Item que dans index.tsx
-export interface Item {
-  id: string;
-  name: string;
-  location: string;
-  date: string;
-  photos?: string[];
-}
+import type { Item } from './types';
 
 // Dictionnaire de synonymes pour recherche intelligente
 const synonyms: { [key: string]: string[] } = {
