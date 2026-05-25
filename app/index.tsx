@@ -25,16 +25,21 @@ export default function EasyFindScreen() {
     loadItems();
   }, []);
 
-  const handleInputFocus = (e: any) => {
+  useEffect(() => {
     if (Platform.OS !== 'web') return;
-    const target = e?.target;
-    if (!target || typeof target.scrollIntoView !== 'function') return;
-    setTimeout(() => {
-      try {
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      } catch {}
-    }, 300);
-  };
+    if (typeof document === 'undefined') return;
+    let meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      meta.setAttribute('content', 'width=device-width, initial-scale=1');
+      document.head.appendChild(meta);
+    }
+    const current = meta.getAttribute('content') || '';
+    if (!current.includes('interactive-widget')) {
+      meta.setAttribute('content', current + ', interactive-widget=resizes-content');
+    }
+  }, []);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -390,9 +395,10 @@ export default function EasyFindScreen() {
       <Text style={styles.subtitle}>Retrouve ou enregistre en langage naturel</Text>
 
       <View style={styles.hintBox}>
-        <Text style={styles.hintTitle}>💡 Parle naturellement :</Text>
-        <Text style={styles.hintText}>• "Où sont mes clés"</Text>
-        <Text style={styles.hintText}>• "J'ai rangé le passeport dans le coffre"</Text>
+        <Text style={styles.hintTitle}>Parlez naturellement…</Text>
+        <Text style={styles.hintExample}>« J'ai rangé les passeports dans la boîte à documents »</Text>
+        <Text style={styles.hintTransition}>Puis demandez :</Text>
+        <Text style={styles.hintExample}>« Où sont les passeports ? »</Text>
       </View>
 
       {/* Mode recherche : affiche résultats */}
@@ -442,7 +448,6 @@ export default function EasyFindScreen() {
           value={input}
           onChangeText={setInput}
           onSubmitEditing={handleSubmit}
-          onFocus={handleInputFocus}
           returnKeyType="done"
           autoCapitalize="sentences"
         />
@@ -689,6 +694,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
     paddingTop: 50,
+    paddingBottom: Platform.OS === 'web' ? 80 : 0,
   },
   toast: {
     position: 'absolute',
@@ -747,10 +753,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 12,
-    marginTop: Platform.OS === 'web' ? 'auto' : 0,
-    marginBottom: Platform.OS === 'web' ? 16 : 0,
-    position: Platform.OS === 'web' ? 'relative' : 'absolute',
-    bottom: Platform.OS === 'web' ? undefined : 0,
+    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as any,
+    bottom: 0,
     left: 0,
     right: 0,
     backgroundColor: '#fff',
@@ -784,9 +788,8 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 8,
-    position: Platform.OS === 'web' ? 'relative' : 'absolute',
-    bottom: Platform.OS === 'web' ? undefined : 70,
+    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as any,
+    bottom: Platform.OS === 'web' ? 80 : 70,
     left: 0,
     right: 0,
   },
@@ -807,6 +810,18 @@ const styles = StyleSheet.create({
   hintText: {
     fontSize: 13,
     color: '#555',
+    marginBottom: 2,
+  },
+  hintExample: {
+    fontSize: 14,
+    color: '#1a1a1a',
+    fontStyle: 'italic',
+    marginBottom: 10,
+    paddingLeft: 4,
+  },
+  hintTransition: {
+    fontSize: 13,
+    color: '#666',
     marginBottom: 2,
   },
 
