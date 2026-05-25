@@ -5,6 +5,34 @@ import { Alert, FlatList, Image, Modal, Platform, ScrollView, Share, StyleSheet,
 import { searchWithSynonyms } from '../synonyms';
 import type { Item } from '../types';
 
+function detectIntent(text: string): 'store' | 'search' {
+  const t = text.trim().toLowerCase();
+  if (!t) return 'search';
+
+  if (t.endsWith('?')) return 'search';
+  if (/^(o[uù]\s|qui\s|quel|quoi\s|quand\s|comment\s|c'est\s+o[uù]|cherche\b|trouve\b)/.test(t)) return 'search';
+  if (t === 'ou' || t === 'où') return 'search';
+
+  const hasPrep = /\s(dans|sur|sous|derri[èe]re)\s/.test(t);
+  if (hasPrep) {
+    const storageVerbs = [
+      "j'ai rangé", "j'ai mis", "j'ai placé", "j'ai déposé",
+      "j'ai stocké", "j'ai caché", "j'ai posé", "j'ai fourré", "j'ai laissé",
+    ];
+    if (storageVerbs.some(v => t.includes(v))) return 'store';
+    if (/\s(est|sont|se\s+trouve|se\s+trouvent)\s/.test(t)) return 'store';
+  }
+
+  return 'search';
+}
+
+function isPluralName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (/^(les|des|mes|tes|ses|nos|vos|leurs)\s/.test(n)) return true;
+  const firstWord = n.split(/\s+/)[0] || '';
+  return /[sx]$/.test(firstWord) && firstWord.length > 2;
+}
+
 export default function EasyFindScreen() {
   const [input, setInput] = useState('');
   const [items, setItems] = useState<Item[]>([]);
@@ -20,6 +48,69 @@ export default function EasyFindScreen() {
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
+  const isVoiceInputRef = useRef(false);
+  const currentInputRef = useRef('');
+  const handleSubmitRef = useRef<((t: string) => void) | null>(null);
+  const submitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearSubmitTimer = () => {
+    if (submitTimerRef.current) {
+      clearTimeout(submitTimerRef.current);
+      submitTimerRef.current = null;
+    }
+  };
+
+  const speak = (text: string, onComplete?: () => void) => {
+    if (Platform.OS !== 'web') return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      if (onComplete) onComplete();
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = (typeof navigator !== 'undefined' && navigator.language) || 'fr-FR';
+      u.rate = 1.0;
+      u.pitch = 1.0;
+      if (onComplete) {
+        u.onend = () => onComplete();
+        u.onerror = () => onComplete();
+      }
+      window.speechSynthesis.speak(u);
+    } catch {
+      if (onComplete) onComplete();
+    }
+  };
+
+  const playSuccessSound = () => {
+    if (Platform.OS !== 'web') return;
+    if (typeof window === 'undefined') return;
+    const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return;
+    try {
+      const ctx = new AC();
+      // Double ding chaleureux : C5 → E5 (tierce majeure), sine, faible volume, attack doux.
+      const notes = [
+        { freq: 523.25, delay: 0.00, dur: 0.34, gain: 0.05 }, // C5
+        { freq: 659.25, delay: 0.11, dur: 0.42, gain: 0.04 }, // E5
+      ];
+      notes.forEach(n => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.type = 'sine';
+        o.frequency.value = n.freq;
+        const start = ctx.currentTime + n.delay;
+        g.gain.setValueAtTime(0, start);
+        g.gain.linearRampToValueAtTime(n.gain, start + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + n.dur);
+        o.start(start);
+        o.stop(start + n.dur + 0.02);
+      });
+      setTimeout(() => { try { ctx.close(); } catch {} }, 700);
+    } catch {}
+  };
 
   useEffect(() => {
     loadItems();
@@ -39,6 +130,23 @@ export default function EasyFindScreen() {
     if (!current.includes('interactive-widget')) {
       meta.setAttribute('content', current + ', interactive-widget=resizes-content');
     }
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.getVoices();
+    const handler = () => window.speechSynthesis.getVoices();
+    (window.speechSynthesis as any).addEventListener?.('voiceschanged', handler);
+    return () => {
+      (window.speechSynthesis as any).removeEventListener?.('voiceschanged', handler);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (submitTimerRef.current) clearTimeout(submitTimerRef.current);
+    };
   }, []);
 
   const showToast = (message: string) => {
@@ -156,6 +264,8 @@ export default function EasyFindScreen() {
       return;
     }
 
+    clearSubmitTimer();
+
     const SpeechRecognition =
       typeof window !== 'undefined'
         ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -179,7 +289,20 @@ export default function EasyFindScreen() {
         for (let i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
         }
+        isVoiceInputRef.current = true;
+        currentInputRef.current = transcript;
         setInput(transcript);
+
+        // Reset debounced auto-submit: 1200 ms après le dernier résultat reçu.
+        // Si l'utilisateur reparle, onresult re-fire et le timer redémarre.
+        clearSubmitTimer();
+        submitTimerRef.current = setTimeout(() => {
+          submitTimerRef.current = null;
+          const txt = currentInputRef.current;
+          if (txt && txt.trim() && handleSubmitRef.current) {
+            handleSubmitRef.current(txt);
+          }
+        }, 1200);
       };
 
       recognition.onerror = (event: any) => {
@@ -193,11 +316,14 @@ export default function EasyFindScreen() {
         }
         recognitionRef.current = null;
         setIsRecording(false);
+        clearSubmitTimer();
       };
 
       recognition.onend = () => {
         recognitionRef.current = null;
         setIsRecording(false);
+        // Pas d'auto-submit ici : le timer programmé par le dernier onresult
+        // continue à tourner et déclenche le submit ~1200 ms après le dernier mot.
       };
 
       recognitionRef.current = recognition;
@@ -211,27 +337,28 @@ export default function EasyFindScreen() {
     }
   };
 
+  const cleanObjectName = (s: string) =>
+    s
+      .replace(/j'ai\s+(rang[ée]|mis|plac[ée]|d[ée]pos[ée]|stock[ée]|cach[ée]|pos[ée]|fourr[ée]|laiss[ée])/i, '')
+      .replace(/^mes\s+/i, '')
+      .replace(/^mon\s+/i, '')
+      .replace(/^ma\s+/i, '')
+      .trim();
+
   const handleSubmitWithText = (text: string) => {
     const trimmedText = text.trim();
     if (!trimmedText) return;
 
-    const lowerText = trimmedText.toLowerCase();
-    
-    const patterns = [
-      / dans /i,
-      / sur /i,
-      /^j'ai rangé (.+) dans (.+)$/i,
-      /^j'ai mis (.+) dans (.+)$/i,
-      /^mes (.+) sont dans (.+)$/i,
-      /^mes (.+) sont sur (.+)$/i,
-      /^(.+) est dans (.+)$/i,
-      /^(.+) est sur (.+)$/i,
-      /^(.+) se trouve dans (.+)$/i,
-    ];
+    // Submit manuel ou auto : on annule toujours le timer d'auto-submit pendant.
+    clearSubmitTimer();
 
-    const isStorageMode = patterns.some(pattern => pattern.test(lowerText));
-    
-    if (isStorageMode) {
+    const fromVoice = isVoiceInputRef.current;
+    isVoiceInputRef.current = false;
+
+    const lowerText = trimmedText.toLowerCase();
+    const intent = detectIntent(trimmedText);
+
+    if (intent === 'store') {
       let name = '';
       let location = '';
 
@@ -239,15 +366,7 @@ export default function EasyFindScreen() {
       if (firstDansIndex !== -1) {
         const before = trimmedText.substring(0, firstDansIndex).trim();
         const after = trimmedText.substring(firstDansIndex + 6).trim();
-
-        let cleaned = before
-          .replace(/j'ai rangé/i, '')
-          .replace(/j'ai mis/i, '')
-          .replace(/mes /i, '')
-          .replace(/mon /i, '')
-          .replace(/ma /i, '')
-          .trim();
-
+        const cleaned = cleanObjectName(before);
         name = cleaned || before;
         location = after;
       }
@@ -256,24 +375,13 @@ export default function EasyFindScreen() {
         const firstSurIndex = lowerText.indexOf(' sur ');
         const before = trimmedText.substring(0, firstSurIndex).trim();
         const after = trimmedText.substring(firstSurIndex + 5).trim();
-
-        let cleaned = before
-          .replace(/j'ai rangé/i, '')
-          .replace(/j'ai mis/i, '')
-          .replace(/mes /i, '')
-          .replace(/mon /i, '')
-          .replace(/ma /i, '')
-          .trim();
-
+        const cleaned = cleanObjectName(before);
         if (!name) name = cleaned || before;
         if (!location) location = after;
       }
 
       if (!name || !location) {
-        Alert.alert(
-          'Je n\'ai pas compris 😕', 
-          'Essaie comme ça :\n\n"J\'ai rangé les clés du coffre dans l\'armoire de la cuisine"\nou\n"Mes lunettes sont sur la table du salon"'
-        );
+        showToast('Reformule, ex : « J\'ai rangé les clés dans le tiroir »');
         return;
       }
 
@@ -288,9 +396,35 @@ export default function EasyFindScreen() {
       const updatedItems = [newItem, ...items];
       saveItems(updatedItems);
       setInput('');
-      showToast(`✅ ${name} → ${location}`);
+      currentInputRef.current = '';
+      playSuccessSound();
+      showToast('✓ Enregistré');
+      return;
+    }
+
+    // intent === 'search' — UI déjà mise à jour via filteredItems live.
+    // Réponse vocale uniquement si la demande vient de la voix.
+    if (fromVoice) {
+      const results = searchWithSynonyms(trimmedText, items);
+      const submitted = trimmedText;
+      const clearIfStillSubmitted = () => {
+        // Ne pas effacer si l'utilisateur a déjà retapé/reparlé entretemps.
+        if (currentInputRef.current === submitted) {
+          currentInputRef.current = '';
+          setInput('');
+        }
+      };
+      if (results.length > 0) {
+        const r = results[0];
+        const verb = isPluralName(r.name) ? 'sont' : 'est';
+        speak(`${r.name} ${verb} dans ${r.location}.`, clearIfStillSubmitted);
+      } else {
+        speak("Désolé, je n'ai rien trouvé.", clearIfStillSubmitted);
+      }
     }
   };
+
+  handleSubmitRef.current = handleSubmitWithText;
 
   const handleSubmit = () => {
     handleSubmitWithText(input);
@@ -446,7 +580,12 @@ export default function EasyFindScreen() {
           placeholder="J'ai rangé..."
           placeholderTextColor="#999"
           value={input}
-          onChangeText={setInput}
+          onChangeText={(text) => {
+            isVoiceInputRef.current = false;
+            currentInputRef.current = text;
+            clearSubmitTimer();
+            setInput(text);
+          }}
           onSubmitEditing={handleSubmit}
           returnKeyType="done"
           autoCapitalize="sentences"
