@@ -397,7 +397,7 @@ export default function EasyFindScreen() {
       <View style={styles.hintBox}>
         <Text style={styles.hintTitle}>Parlez naturellement…</Text>
         <Text style={styles.hintExample}>« J'ai rangé les passeports dans la boîte à documents »</Text>
-        <Text style={styles.hintTransition}>Puis demandez :</Text>
+        <Text style={styles.hintTransition}>3 mois après…</Text>
         <Text style={styles.hintExample}>« Où sont les passeports ? »</Text>
       </View>
 
