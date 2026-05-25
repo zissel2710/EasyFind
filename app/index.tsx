@@ -19,28 +19,22 @@ export default function EasyFindScreen() {
   const [editLocation, setEditLocation] = useState('');
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     loadItems();
   }, []);
 
-  useEffect(() => {
+  const handleInputFocus = (e: any) => {
     if (Platform.OS !== 'web') return;
-    if (typeof window === 'undefined' || !window.visualViewport) return;
-    const vv = window.visualViewport;
-    const handler = () => {
-      const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      setKeyboardOffset(offset);
-    };
-    vv.addEventListener('resize', handler);
-    vv.addEventListener('scroll', handler);
-    return () => {
-      vv.removeEventListener('resize', handler);
-      vv.removeEventListener('scroll', handler);
-    };
-  }, []);
+    const target = e?.target;
+    if (!target || typeof target.scrollIntoView !== 'function') return;
+    setTimeout(() => {
+      try {
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch {}
+    }, 300);
+  };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -439,13 +433,8 @@ export default function EasyFindScreen() {
         </View>
       )}
 
-      {/* Barre de saisie - en bas sur mobile, au centre sur web */}
-      <View
-        style={[
-          styles.inputBar,
-          Platform.OS === 'web' && keyboardOffset > 0 && { transform: [{ translateY: -keyboardOffset }] },
-        ]}
-      >
+      {/* Barre de saisie */}
+      <View style={styles.inputBar}>
         <TextInput
           style={styles.input}
           placeholder="J'ai rangé..."
@@ -453,6 +442,7 @@ export default function EasyFindScreen() {
           value={input}
           onChangeText={setInput}
           onSubmitEditing={handleSubmit}
+          onFocus={handleInputFocus}
           returnKeyType="done"
           autoCapitalize="sentences"
         />
@@ -756,22 +746,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 10,
-    marginBottom: Platform.OS === 'web' ? 10 : 0,
+    paddingVertical: 12,
+    marginTop: Platform.OS === 'web' ? 'auto' : 0,
+    marginBottom: Platform.OS === 'web' ? 16 : 0,
     position: Platform.OS === 'web' ? 'relative' : 'absolute',
     bottom: Platform.OS === 'web' ? undefined : 0,
     left: 0,
     right: 0,
     backgroundColor: '#fff',
-    borderTopWidth: Platform.OS === 'web' ? 0 : 1,
+    borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
   },
   input: {
     flex: 1,
-    height: 44,
+    height: 48,
     borderWidth: 1,
     borderColor: '#ddd',
-    borderRadius: 22,
+    borderRadius: 24,
     paddingHorizontal: 18,
     fontSize: 16,
     backgroundColor: '#fff',
