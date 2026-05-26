@@ -453,6 +453,12 @@ export default function EasyFindScreen() {
 
   const handleSubmit = () => {
     handleSubmitWithText(input);
+    // Ferme le clavier pour donner un feedback visible et libérer l'écran.
+    // (Non appelé sur l'auto-submit vocal : la voix passe par handleSubmitRef directement.)
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === 'function') active.blur();
+    }
   };
 
   const handleEditItem = (item: Item) => {
