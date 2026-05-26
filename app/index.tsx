@@ -128,6 +128,8 @@ export default function EasyFindScreen() {
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     if (typeof document === 'undefined') return;
+
+    // 1. Meta viewport — clavier mobile shrink-content
     let meta = document.querySelector('meta[name="viewport"]');
     if (!meta) {
       meta = document.createElement('meta');
@@ -139,6 +141,15 @@ export default function EasyFindScreen() {
     if (!current.includes('interactive-widget')) {
       meta.setAttribute('content', current + ', interactive-widget=resizes-content');
     }
+
+    // 2. Bloque le scroll global du document — l'app-shell gère le scroll en interne.
+    //    Sans ça, iOS Safari auto-scrolle le document au focus de l'input et fait
+    //    sortir le header par le haut.
+    document.documentElement.style.height = '100%';
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.height = '100%';
+    document.body.style.overflow = 'hidden';
+    document.body.style.margin = '0';
   }, []);
 
   useEffect(() => {
@@ -544,56 +555,59 @@ export default function EasyFindScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
-      <Text style={styles.subtitle}>Retrouve ou enregistre en langage naturel</Text>
+      {/* Zone centrale scrollable - seule partie qui scrolle */}
+      <View style={styles.contentArea}>
+        {isSearchMode ? (
+          <View style={styles.searchResults}>
+            <Text style={styles.searchResultsTitle}>
+              {filteredItems.length} résultat{filteredItems.length > 1 ? 's' : ''}
+            </Text>
+            <FlatList
+              data={filteredItems}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.itemCard}
+                  onPress={() => item.photos && item.photos.length > 0 && viewPhotos(item.photos)}
+                >
+                  {item.photos && item.photos.length > 0 && (
+                    <Image
+                      source={{ uri: item.photos[0] }}
+                      style={styles.thumbnail}
+                    />
+                  )}
 
-      <View style={styles.hintBox}>
-        <Text style={styles.hintTitle}>Parlez naturellement…</Text>
-        <Text style={styles.hintExample}>« J'ai rangé les passeports dans la boîte à documents »</Text>
-        <Text style={styles.hintTransition}>3 mois après…</Text>
-        <Text style={styles.hintExample}>« Où sont les passeports ? »</Text>
+                  <View style={styles.itemContent}>
+                    <Text style={styles.itemName}>{item.name}</Text>
+                    <Text style={styles.itemLocation}>📍 {item.location}</Text>
+                    <Text style={styles.itemDate}>
+                      {item.date}
+                      {item.photos && item.photos.length > 0 && ` • ${item.photos.length} photo${item.photos.length > 1 ? 's' : ''}`}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <Text style={styles.emptyText}>
+                  Aucun résultat
+                  {selectedCategory !== 'Tout' ? ` dans « ${selectedCategory} »` : ''}.
+                  {selectedCategory !== 'Tout' ? '\nEssaie la catégorie « Tout ».' : ''}
+                </Text>
+              }
+            />
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.hintScrollContent}>
+            <Text style={styles.subtitle}>Retrouve ou enregistre en langage naturel</Text>
+            <View style={styles.hintBox}>
+              <Text style={styles.hintTitle}>Parlez naturellement…</Text>
+              <Text style={styles.hintExample}>« J'ai rangé les passeports dans la boîte à documents »</Text>
+              <Text style={styles.hintTransition}>3 mois après…</Text>
+              <Text style={styles.hintExample}>« Où sont les passeports ? »</Text>
+            </View>
+          </ScrollView>
+        )}
       </View>
-
-      {/* Mode recherche : affiche résultats */}
-      {isSearchMode && (
-        <View style={styles.searchResults}>
-          <Text style={styles.searchResultsTitle}>
-            {filteredItems.length} résultat{filteredItems.length > 1 ? 's' : ''}
-          </Text>
-          <FlatList
-            data={filteredItems}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity 
-                style={styles.itemCard}
-                onPress={() => item.photos && item.photos.length > 0 && viewPhotos(item.photos)}
-              >
-                {item.photos && item.photos.length > 0 && (
-                  <Image 
-                    source={{ uri: item.photos[0] }}
-                    style={styles.thumbnail}
-                  />
-                )}
-                
-                <View style={styles.itemContent}>
-                  <Text style={styles.itemName}>{item.name}</Text>
-                  <Text style={styles.itemLocation}>📍 {item.location}</Text>
-                  <Text style={styles.itemDate}>
-                    {item.date}
-                    {item.photos && item.photos.length > 0 && ` • ${item.photos.length} photo${item.photos.length > 1 ? 's' : ''}`}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            )}
-            ListEmptyComponent={
-              <Text style={styles.emptyText}>
-                Aucun résultat
-                {selectedCategory !== 'Tout' ? ` dans « ${selectedCategory} »` : ''}.
-                {selectedCategory !== 'Tout' ? '\nEssaie la catégorie « Tout ».' : ''}
-              </Text>
-            }
-          />
-        </View>
-      )}
 
       {/* Barre du bas : recording indicator + chips catégories + input */}
       <View style={styles.bottomBar}>
@@ -904,14 +918,20 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
-    paddingTop: 50,
-    paddingBottom: Platform.OS === 'web' ? 140 : 0,
+    overflow: 'hidden',
+  },
+  contentArea: {
+    flex: 1,
+  },
+  hintScrollContent: {
+    paddingBottom: 16,
   },
   bottomBar: {
-    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as any,
-    bottom: 0,
-    left: 0,
-    right: 0,
+    // Web : en-flow au bas du flex column (app-shell). Natif : conserve l'absolute legacy.
+    position: (Platform.OS === 'web' ? 'relative' : 'absolute') as any,
+    bottom: Platform.OS === 'web' ? undefined : 0,
+    left: Platform.OS === 'web' ? undefined : 0,
+    right: Platform.OS === 'web' ? undefined : 0,
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
@@ -977,6 +997,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
+    paddingTop: 50,
     marginBottom: 5,
   },
   hamburger: {
