@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, FlatList, Image, Modal, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { searchWithSynonyms } from '../synonyms';
-import type { Item } from '../types';
+import { CATEGORIES, DEFAULT_CATEGORY, type Item } from '../types';
 
 function detectIntent(text: string): 'store' | 'search' {
   const t = text.trim().toLowerCase();
@@ -47,6 +47,7 @@ export default function EasyFindScreen() {
   const [editLocation, setEditLocation] = useState('');
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>('Tout');
   const recognitionRef = useRef<any>(null);
   const isVoiceInputRef = useRef(false);
   const currentInputRef = useRef('');
@@ -114,7 +115,15 @@ export default function EasyFindScreen() {
 
   useEffect(() => {
     loadItems();
+    AsyncStorage.getItem('easyfind_category').then(v => {
+      if (v && (CATEGORIES as readonly string[]).includes(v)) setSelectedCategory(v);
+    }).catch(() => {});
   }, []);
+
+  const handleCategoryChange = (cat: string) => {
+    setSelectedCategory(cat);
+    AsyncStorage.setItem('easyfind_category', cat).catch(() => {});
+  };
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -391,6 +400,8 @@ export default function EasyFindScreen() {
         location,
         date: new Date().toLocaleDateString('fr-FR'),
         photos: [],
+        category: selectedCategory === 'Tout' ? DEFAULT_CATEGORY : selectedCategory,
+        type: 'object',
       };
 
       const updatedItems = [newItem, ...items];
@@ -405,7 +416,10 @@ export default function EasyFindScreen() {
     // intent === 'search' — UI déjà mise à jour via filteredItems live.
     // Réponse vocale uniquement si la demande vient de la voix.
     if (fromVoice) {
-      const results = searchWithSynonyms(trimmedText, items);
+      const scope = selectedCategory === 'Tout'
+        ? items
+        : items.filter(i => (i.category ?? DEFAULT_CATEGORY) === selectedCategory);
+      const results = searchWithSynonyms(trimmedText, scope);
       const submitted = trimmedText;
       const clearIfStillSubmitted = () => {
         // Ne pas effacer si l'utilisateur a déjà retapé/reparlé entretemps.
@@ -501,10 +515,14 @@ export default function EasyFindScreen() {
     !lowerInput.includes(' sur ') &&
     !lowerInput.includes('j\'ai rangé') &&
     !lowerInput.includes('j\'ai mis');
-  
+
+  const categoryFilteredItems = selectedCategory === 'Tout'
+    ? items
+    : items.filter(i => (i.category ?? DEFAULT_CATEGORY) === selectedCategory);
+
   const filteredItems = isSearchMode
-    ? searchWithSynonyms(input, items)
-    : items;
+    ? searchWithSynonyms(input, categoryFilteredItems)
+    : categoryFilteredItems;
 
   return (
     <View style={styles.container}>
@@ -567,52 +585,84 @@ export default function EasyFindScreen() {
               </TouchableOpacity>
             )}
             ListEmptyComponent={
-              <Text style={styles.emptyText}>Aucun objet trouvé 😕</Text>
+              <Text style={styles.emptyText}>
+                Aucun résultat
+                {selectedCategory !== 'Tout' ? ` dans « ${selectedCategory} »` : ''}.
+                {selectedCategory !== 'Tout' ? '\nEssaie la catégorie « Tout ».' : ''}
+              </Text>
             }
           />
         </View>
       )}
 
-      {/* Barre de saisie */}
-      <View style={styles.inputBar}>
-        <TextInput
-          style={styles.input}
-          placeholder="J'ai rangé..."
-          placeholderTextColor="#999"
-          value={input}
-          onChangeText={(text) => {
-            isVoiceInputRef.current = false;
-            currentInputRef.current = text;
-            clearSubmitTimer();
-            setInput(text);
-          }}
-          onSubmitEditing={handleSubmit}
-          returnKeyType="done"
-          autoCapitalize="sentences"
-        />
+      {/* Barre du bas : recording indicator + chips catégories + input */}
+      <View style={styles.bottomBar}>
+        {isRecording && (
+          <Text style={styles.recordingText}>🎤 J'écoute...</Text>
+        )}
 
-        <TouchableOpacity 
-          style={styles.iconButton}
-          onPress={startCamera}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoriesRow}
         >
-          <Ionicons name="camera" size={26} color="#007AFF" />
-        </TouchableOpacity>
+          {CATEGORIES.map(cat => {
+            const active = selectedCategory === cat;
+            return (
+              <TouchableOpacity
+                key={cat}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => handleCategoryChange(cat)}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{cat}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
 
-        <TouchableOpacity
-          style={[styles.iconButton, isRecording && styles.iconButtonRecording]}
-          onPress={startRecording}
-        >
-          <Ionicons 
-            name={isRecording ? "radio-button-on" : "mic"} 
-            size={26} 
-            color={isRecording ? "#FF3B30" : "#007AFF"} 
+        <View style={styles.inputBar}>
+          <TextInput
+            style={styles.input}
+            placeholder="J'ai rangé..."
+            placeholderTextColor="#999"
+            value={input}
+            onChangeText={(text) => {
+              isVoiceInputRef.current = false;
+              currentInputRef.current = text;
+              clearSubmitTimer();
+              setInput(text);
+            }}
+            onSubmitEditing={handleSubmit}
+            returnKeyType="done"
+            autoCapitalize="sentences"
           />
-        </TouchableOpacity>
-      </View>
 
-      {isRecording && (
-        <Text style={styles.recordingText}>🎤 J'écoute...</Text>
-      )}
+          {isRecording ? (
+            <TouchableOpacity
+              style={[styles.iconButton, styles.iconButtonRecording]}
+              onPress={startRecording}
+            >
+              <Ionicons name="radio-button-on" size={26} color="#FF3B30" />
+            </TouchableOpacity>
+          ) : input.trim().length > 0 ? (
+            <TouchableOpacity
+              style={styles.sendButton}
+              onPress={handleSubmit}
+            >
+              <Ionicons name="arrow-up-circle" size={38} color="#007AFF" />
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity style={styles.iconButton} onPress={startCamera}>
+                <Ionicons name="camera-outline" size={26} color="#007AFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconButton} onPress={startRecording}>
+                <Ionicons name="mic" size={26} color="#007AFF" />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </View>
 
       {/* Drawer latéral (menu hamburger) */}
       <Modal
@@ -634,8 +684,30 @@ export default function EasyFindScreen() {
               </TouchableOpacity>
             </View>
 
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.categoriesRow}
+            >
+              {CATEGORIES.map(cat => {
+                const active = selectedCategory === cat;
+                return (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[styles.chip, active && styles.chipActive]}
+                    onPress={() => {
+                      handleCategoryChange(cat);
+                      setDrawerVisible(false);
+                    }}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{cat}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
             <Text style={styles.drawerCount}>
-              {items.length} objet{items.length > 1 ? 's' : ''} enregistré{items.length > 1 ? 's' : ''}
+              {items.length} objet{items.length > 1 ? 's' : ''} enregistré{items.length > 1 ? 's' : ''} au total
             </Text>
 
             <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
@@ -833,7 +905,50 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
     paddingTop: 50,
-    paddingBottom: Platform.OS === 'web' ? 80 : 0,
+    paddingBottom: Platform.OS === 'web' ? 140 : 0,
+  },
+  bottomBar: {
+    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as any,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  categoriesRow: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+    alignItems: 'center',
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#f0f0f0',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  chipActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  chipText: {
+    fontSize: 13,
+    color: '#333',
+    fontWeight: '500',
+  },
+  chipTextActive: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  sendButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
   },
   toast: {
     position: 'absolute',
@@ -886,19 +1001,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   
-  // Barre de saisie - adaptative web/mobile
+  // Barre de saisie - intégrée dans bottomBar
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as any,
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   input: {
     flex: 1,
@@ -925,12 +1033,10 @@ const styles = StyleSheet.create({
   recordingText: {
     textAlign: 'center',
     color: '#FF3B30',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as any,
-    bottom: Platform.OS === 'web' ? 80 : 70,
-    left: 0,
-    right: 0,
+    paddingTop: 6,
+    paddingBottom: 2,
   },
 
   hintBox: {
